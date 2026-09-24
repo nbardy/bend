@@ -2913,6 +2913,24 @@ export function body_flatten(b: Body, vars: PVar[], fr: () => number): LTerm {
 // a rewrite demands its evidence and steps to its body on {==}, else
 // sticks as a value.
 
+// Base's Nat.add, sub, max and cmp on two numbers are computed natively,
+// as the compiler does, instead of unfolding one Succ per unit
+const NAT_OPS: Record<Name, (a: number, b: number, s?: Span) => HTerm | null> = {
+  "Nat.add": (a, b, s) => Number.isSafeInteger(a + b) ? Lit("Nat", a + b, s) : null,
+  "Nat.sub": (a, b, s) => Lit("Nat", Math.max(a - b, 0), s),
+  "Nat.max": (a, b, s) => Lit("Nat", Math.max(a, b), s),
+  "Nat.cmp": (a, b, s) => Ctr(a < b ? "LT" : a > b ? "GT" : "EQ", [], s),
+};
+
+// the number an argument frame holds, if it is Succs over a literal or Zero
+function nat_of(book: Book, fr: Frame, k = 0): number | null {
+  let t = term_wnf(book, (fr as Extract<Frame, { $: "APP" }>).x);
+  for (; t.$ === "Ctr" && t.k === "Succ"; k += 1) {
+    t = term_wnf(book, t.x[0]);
+  }
+  return t.$ === "Lit" && t.k === "Nat" ? t.v + k : t.$ === "Ctr" && t.k === "Zero" ? k : null;
+}
+
 export function term_wnf(book: Book, term: HTerm): HTerm {
   const frs: Frame[] = [];
   let tm: HTerm = term;
@@ -3010,6 +3028,11 @@ export function term_wnf(book: Book, term: HTerm): HTerm {
         if (run < tld.n || tld.v === null) {
           break focus;
         }
+        const op = tld.b ? NAT_OPS[tm.k] : undefined;
+        const a = op ? nat_of(book, frs[frs.length - 1]) : null;
+        const b = a !== null ? nat_of(book, frs[frs.length - 2]) : null;
+        const nat = b !== null ? op!(a!, b, tm.s) : null;
+        if (nat !== null) { frs.length -= 2; tm = nat; continue main; }
         const rf: HTerm = tm;
         lhs = { t: () => rf, n: tld.n };
         tm = tld.v;
